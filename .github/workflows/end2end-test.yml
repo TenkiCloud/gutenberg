@@ -70,10 +70,28 @@ jobs:
 
             - name: Docker setup status
               run: |
-                docker info -f "{{println .SecurityOptions}}" | grep rootless
+                # Don't fail the step if grep finds no match
+                if docker info -f '{{json .SecurityOptions}}' | grep -qi rootless; then
+                  echo "Docker is ROOTLESS"
+                else
+                  echo "Docker is ROOTFUL (or not reporting rootless)"
+                fi
 
-                echo $GITHUB_WORKSPACE
-                ls -ld $GITHUB_WORKSPACE
+                echo "Workspace: $GITHUB_WORKSPACE"
+                ls -ld "$GITHUB_WORKSPACE"
+                echo
+                echo "Path traverse (every parent needs 'x'):"
+                namei -l "$GITHUB_WORKSPACE" || true
+
+                echo
+                docker compose version || true
+                docker buildx version || true
+
+            - name: Bind mount smoke test
+              run: |
+                docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.19 sh -lc 'ls -la >/dev/null && echo BIND_OK'
+
+
 
             - name: Make workspace path traversable for Docker
               shell: bash
