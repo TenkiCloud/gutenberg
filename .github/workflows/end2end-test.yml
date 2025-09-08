@@ -108,9 +108,9 @@ jobs:
                 docker volume ls
                 docker compose logs --no-color || true
 
-                - name: Stop WP env (always)
-                  if: always()
-                  run: npx wp-env stop || true
+            - name: Stop WP env (always)
+              if: always()
+              run: npx wp-env stop || true
 
 
             - name: Archive debug artifacts (screenshots, traces)
