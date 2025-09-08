@@ -70,10 +70,8 @@ jobs:
 
             - name: Docker setup status
               run: |
-                # 1) Is Docker rootless?
                 docker info | grep -i rootless
 
-                # 2) Which user owns the workspace; is it traversable by others?
                 echo "$GITHUB_WORKSPACE"
                 namei -l "$GITHUB_WORKSPACE"
 
