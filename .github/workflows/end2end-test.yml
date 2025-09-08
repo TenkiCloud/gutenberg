@@ -70,10 +70,10 @@ jobs:
 
             - name: Docker setup status
               run: |
-                docker info | grep -i rootless
+                docker info -f "{{println .SecurityOptions}}" | grep rootless
 
-                echo "$GITHUB_WORKSPACE"
-                namei -l "$GITHUB_WORKSPACE"
+                echo $GITHUB_WORKSPACE
+                ls -ld $GITHUB_WORKSPACE
 
             - name: Make workspace path traversable for Docker
               shell: bash
