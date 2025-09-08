@@ -48,6 +48,22 @@ jobs:
               run: |
                   npx playwright install chromium firefox webkit --with-deps
 
+            # isolate docker resources per shard
+            - name: Isolate docker compose project
+              run: echo "COMPOSE_PROJECT_NAME=gutenberg_${GITHUB_RUN_ID}_${{ matrix.part }}" >> $GITHUB_ENV
+
+            # unique ports per shard to avoid collisions
+            - name: Avoid port collisions across matrix
+              run: |
+                base_port=$((8000 + ${{ matrix.part }}))
+                base_tests_port=$((9000 + ${{ matrix.part }}))
+                cat > .wp-env.override.json <<EOF
+                {
+                  "port": ${base_port},
+                  "testsPort": ${base_tests_port}
+                }
+                EOF
+
             - name: Install WordPress and start the server
               run: |
                   npm run wp-env start
@@ -59,6 +75,20 @@ jobs:
                   SHARD_TOTAL: ${{ matrix.totalParts }}
               run: |
                   xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- npm run test:e2e -- --shard="${SHARD_PART}/${SHARD_TOTAL}"
+
+            # debug & cleanup
+            - name: Debug docker state on failure
+              if: failure()
+              run: |
+                docker ps -a
+                docker network ls
+                docker volume ls
+                docker compose logs --no-color || true
+
+                - name: Stop WP env (always)
+                  if: always()
+                  run: npx wp-env stop || true
+
 
             - name: Archive debug artifacts (screenshots, traces)
               uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
