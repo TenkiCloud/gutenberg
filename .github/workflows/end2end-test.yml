@@ -42,6 +42,18 @@ jobs:
                   show-progress: ${{ runner.debug == '1' && 'true' || 'false' }}
                   persist-credentials: false
 
+
+            - name: Move workspace out of /tmp
+              run: |
+                sudo mkdir -p /home/runner/work
+                sudo chown -R "$USER":"$USER" /home/runner/work
+                dst="/home/runner/work/${GITHUB_REPOSITORY#*/}/${GITHUB_REPOSITORY#*/}"
+                mkdir -p "$(dirname "$dst")"
+                rsync -a --delete "$GITHUB_WORKSPACE/" "$dst/"
+                echo "GITHUB_WORKSPACE=$dst" >> "$GITHUB_ENV"
+                cd "$dst"
+                git status -s || true
+
             - name: Setup Node.js and install dependencies
               uses: ./.github/setup-node
 
@@ -53,43 +65,43 @@ jobs:
                   npx playwright install chromium firefox webkit --with-deps
 
             # isolate docker resources per shard
-            - name: Isolate docker compose project
-              run: echo "COMPOSE_PROJECT_NAME=gutenberg_${GITHUB_RUN_ID}_${{ matrix.part }}" >> $GITHUB_ENV
+            # - name: Isolate docker compose project
+            #   run: echo "COMPOSE_PROJECT_NAME=gutenberg_${GITHUB_RUN_ID}_${{ matrix.part }}" >> $GITHUB_ENV
 
-            # unique ports per shard to avoid collisions
-            - name: Avoid port collisions across matrix
-              run: |
-                base_port=$((8000 + ${{ matrix.part }}))
-                base_tests_port=$((9000 + ${{ matrix.part }}))
-                cat > .wp-env.override.json <<EOF
-                {
-                  "port": ${base_port},
-                  "testsPort": ${base_tests_port}
-                }
-                EOF
+            # # unique ports per shard to avoid collisions
+            # - name: Avoid port collisions across matrix
+            #   run: |
+            #     base_port=$((8000 + ${{ matrix.part }}))
+            #     base_tests_port=$((9000 + ${{ matrix.part }}))
+            #     cat > .wp-env.override.json <<EOF
+            #     {
+            #       "port": ${base_port},
+            #       "testsPort": ${base_tests_port}
+            #     }
+            #     EOF
 
-            - name: Docker setup status
-              run: |
-                # Don't fail the step if grep finds no match
-                if docker info -f '{{json .SecurityOptions}}' | grep -qi rootless; then
-                  echo "Docker is ROOTLESS"
-                else
-                  echo "Docker is ROOTFUL (or not reporting rootless)"
-                fi
+            # - name: Docker setup status
+            #   run: |
+            #     # Don't fail the step if grep finds no match
+            #     if docker info -f '{{json .SecurityOptions}}' | grep -qi rootless; then
+            #       echo "Docker is ROOTLESS"
+            #     else
+            #       echo "Docker is ROOTFUL (or not reporting rootless)"
+            #     fi
 
-                echo "Workspace: $GITHUB_WORKSPACE"
-                ls -ld "$GITHUB_WORKSPACE"
-                echo
-                echo "Path traverse (every parent needs 'x'):"
-                namei -l "$GITHUB_WORKSPACE" || true
+            #     echo "Workspace: $GITHUB_WORKSPACE"
+            #     ls -ld "$GITHUB_WORKSPACE"
+            #     echo
+            #     echo "Path traverse (every parent needs 'x'):"
+            #     namei -l "$GITHUB_WORKSPACE" || true
 
-                echo
-                docker compose version || true
-                docker buildx version || true
+            #     echo
+            #     docker compose version || true
+            #     docker buildx version || true
 
-            - name: Bind mount smoke test
-              run: |
-                docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.19 sh -lc 'ls -la >/dev/null && echo BIND_OK'
+            # - name: Bind mount smoke test
+            #   run: |
+            #     docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.19 sh -lc 'ls -la >/dev/null && echo BIND_OK'
 
 
 
