@@ -19,6 +19,10 @@ concurrency:
 # Any needed permissions should be configured at the job level.
 permissions: {}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
     e2e-playwright:
         name: Playwright - ${{ matrix.part }}
