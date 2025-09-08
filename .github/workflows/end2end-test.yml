@@ -68,6 +68,27 @@ jobs:
                 }
                 EOF
 
+            - name: Docker setup status
+              run: |
+                # 1) Is Docker rootless?
+                docker info | grep -i rootless
+
+                # 2) Which user owns the workspace; is it traversable by others?
+                echo "$GITHUB_WORKSPACE"
+                namei -l "$GITHUB_WORKSPACE"
+
+            - name: Make workspace path traversable for Docker
+              shell: bash
+              run: |
+                # Ensure every parent dir is executable by others (so another user can traverse)
+                p="$GITHUB_WORKSPACE"
+                while [ "$p" != "/" ]; do
+                  sudo chmod o+rx "$p" || true
+                  p="$(dirname "$p")"
+                done
+
+
+
             - name: Install WordPress and start the server
               run: |
                   npm run wp-env start
