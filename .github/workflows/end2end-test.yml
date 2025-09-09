@@ -37,7 +37,7 @@ jobs:
     runs-on: ${{ inputs.runner || 'tenki-standard-autoscale' }}
     permissions:
       contents: read
-    if: ${{ github.repository == 'WordPress/gutenberg' || github.event_name == 'pull_request' }}
+    # if: ${{ github.repository == 'WordPress/gutenberg' || github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
