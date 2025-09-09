@@ -1,19 +1,27 @@
 name: End-to-End Tests
 
-on: pull_request
-    # pull_request:
-    # push:
-    #     branches:
-    #         - trunk
-    #         - 'release/**'
-    #         - 'wp/**'
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner label to use for all jobs"
+        type: choice
+        required: true
+        default: tenki-standard-autoscale
+        options:
+          - tenki-standard-autoscale
+          - tenki-standard-medium-4c-8g
+          - tenki-standard-large-8c-16g
+          - tenki-standard-large-plus-16c-32g
+          - ubuntu-latest
 
 # Cancels all previous workflow runs for pull requests that have not completed.
 concurrency:
-    # The concurrency group contains the workflow name and the branch name for pull requests
-    # or the commit hash for any other events.
-    group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
-    cancel-in-progress: true
+  # The concurrency group contains the workflow name and the branch name for pull requests
+  # or the commit hash for any other events.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: true
 
 # Disable permissions for all available scopes by default.
 # Any needed permissions should be configured at the job level.
@@ -24,204 +32,159 @@ defaults:
     shell: bash
 
 jobs:
-    e2e-playwright:
-        name: Playwright - ${{ matrix.part }}
-        runs-on: tenki-standard-autoscale
-        permissions:
-            contents: read
-        if: ${{ github.repository == 'WordPress/gutenberg' || github.event_name == 'pull_request' }}
-        strategy:
-            fail-fast: false
-            matrix:
-                part: [1, 2, 3, 4, 5, 6, 7, 8]
-                totalParts: [8]
+  e2e-playwright:
+    name: Playwright - ${{ matrix.part }}
+    runs-on: ${{ inputs.runner || 'tenki-standard-autoscale' }}
+    permissions:
+      contents: read
+    if: ${{ github.repository == 'WordPress/gutenberg' || github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4, 5, 6, 7, 8]
+        totalParts: [8]
 
-        steps:
-            - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-              with:
-                  show-progress: ${{ runner.debug == '1' && 'true' || 'false' }}
-                  persist-credentials: false
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          show-progress: ${{ runner.debug == '1' && 'true' || 'false' }}
+          persist-credentials: false
 
+      - name: Move workspace out of /tmp
+        run: |
+          sudo mkdir -p /home/runner/work
+          sudo chown -R "$USER":"$USER" /home/runner/work
+          dst="/home/runner/work/${GITHUB_REPOSITORY#*/}/${GITHUB_REPOSITORY#*/}"
+          mkdir -p "$(dirname "$dst")"
+          rsync -a --delete "$GITHUB_WORKSPACE/" "$dst/"
+          echo "GITHUB_WORKSPACE=$dst" >> "$GITHUB_ENV"
+          cd "$dst"
+          git status -s || true
 
-            - name: Move workspace out of /tmp
-              run: |
-                sudo mkdir -p /home/runner/work
-                sudo chown -R "$USER":"$USER" /home/runner/work
-                dst="/home/runner/work/${GITHUB_REPOSITORY#*/}/${GITHUB_REPOSITORY#*/}"
-                mkdir -p "$(dirname "$dst")"
-                rsync -a --delete "$GITHUB_WORKSPACE/" "$dst/"
-                echo "GITHUB_WORKSPACE=$dst" >> "$GITHUB_ENV"
-                cd "$dst"
-                git status -s || true
+      - name: Setup Node.js and install dependencies
+        uses: ./.github/setup-node
 
-            - name: Setup Node.js and install dependencies
-              uses: ./.github/setup-node
+      - name: Npm build
+        run: npm run build
 
-            - name: Npm build
-              run: npm run build
+      - name: Install Playwright dependencies
+        run: |
+          npx playwright install chromium firefox webkit --with-deps
 
-            - name: Install Playwright dependencies
-              run: |
-                  npx playwright install chromium firefox webkit --with-deps
+      - name: Make workspace path traversable for Docker
+        shell: bash
+        run: |
+          # Ensure every parent dir is executable by others (so another user can traverse)
+          p="$GITHUB_WORKSPACE"
+          while [ "$p" != "/" ]; do
+            sudo chmod o+rx "$p" || true
+            p="$(dirname "$p")"
+          done
 
-            # isolate docker resources per shard
-            # - name: Isolate docker compose project
-            #   run: echo "COMPOSE_PROJECT_NAME=gutenberg_${GITHUB_RUN_ID}_${{ matrix.part }}" >> $GITHUB_ENV
+      - name: Install WordPress and start the server
+        run: |
+          npm run wp-env start
 
-            # # unique ports per shard to avoid collisions
-            # - name: Avoid port collisions across matrix
-            #   run: |
-            #     base_port=$((8000 + ${{ matrix.part }}))
-            #     base_tests_port=$((9000 + ${{ matrix.part }}))
-            #     cat > .wp-env.override.json <<EOF
-            #     {
-            #       "port": ${base_port},
-            #       "testsPort": ${base_tests_port}
-            #     }
-            #     EOF
+      - name: Run the tests
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+          SHARD_PART: ${{ matrix.part }}
+          SHARD_TOTAL: ${{ matrix.totalParts }}
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- npm run test:e2e -- --shard="${SHARD_PART}/${SHARD_TOTAL}"
 
-            # - name: Docker setup status
-            #   run: |
-            #     # Don't fail the step if grep finds no match
-            #     if docker info -f '{{json .SecurityOptions}}' | grep -qi rootless; then
-            #       echo "Docker is ROOTLESS"
-            #     else
-            #       echo "Docker is ROOTFUL (or not reporting rootless)"
-            #     fi
+      # debug & cleanup
+      - name: Debug docker state on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker network ls
+          docker volume ls
+          docker compose logs --no-color || true
 
-            #     echo "Workspace: $GITHUB_WORKSPACE"
-            #     ls -ld "$GITHUB_WORKSPACE"
-            #     echo
-            #     echo "Path traverse (every parent needs 'x'):"
-            #     namei -l "$GITHUB_WORKSPACE" || true
+      - name: Stop WP env (always)
+        if: always()
+        run: npx wp-env stop || true
 
-            #     echo
-            #     docker compose version || true
-            #     docker buildx version || true
-
-            # - name: Bind mount smoke test
-            #   run: |
-            #     docker run --rm -v "$GITHUB_WORKSPACE":/w -w /w alpine:3.19 sh -lc 'ls -la >/dev/null && echo BIND_OK'
-
-
-
-            - name: Make workspace path traversable for Docker
-              shell: bash
-              run: |
-                # Ensure every parent dir is executable by others (so another user can traverse)
-                p="$GITHUB_WORKSPACE"
-                while [ "$p" != "/" ]; do
-                  sudo chmod o+rx "$p" || true
-                  p="$(dirname "$p")"
-                done
-
-
-
-            - name: Install WordPress and start the server
-              run: |
-                  npm run wp-env start
-
-            - name: Run the tests
-              env:
-                  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
-                  SHARD_PART: ${{ matrix.part }}
-                  SHARD_TOTAL: ${{ matrix.totalParts }}
-              run: |
-                  xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- npm run test:e2e -- --shard="${SHARD_PART}/${SHARD_TOTAL}"
-
-            # debug & cleanup
-            - name: Debug docker state on failure
-              if: failure()
-              run: |
-                docker ps -a
-                docker network ls
-                docker volume ls
-                docker compose logs --no-color || true
-
-            - name: Stop WP env (always)
-              if: always()
-              run: npx wp-env stop || true
-
-
-            - name: Archive debug artifacts (screenshots, traces)
-              uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
-              if: ${{ !cancelled() }}
-              with:
-                  name: failures-artifacts--${{ matrix.part }}
-                  path: artifacts/test-results
-                  if-no-files-found: ignore
-
-            - name: Archive flaky tests report
-              uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
-              if: ${{ !cancelled() }}
-              with:
-                  name: flaky-tests-report--${{ matrix.part }}
-                  path: flaky-tests
-                  if-no-files-found: ignore
-
-    merge-artifacts:
-        name: Merge Artifacts
+      - name: Archive debug artifacts (screenshots, traces)
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         if: ${{ !cancelled() }}
-        needs: [e2e-playwright]
-        runs-on: tenki-standard-autoscale
-        permissions: {}
-        outputs:
-            has-flaky-test-report: ${{ !!steps.merge-flaky-tests-reports.outputs.artifact-id }}
-        steps:
-            - name: Merge failures artifacts
-              uses: actions/upload-artifact/merge@v4
-              # Don't fail the job if there aren't any artifacts to merge.
-              continue-on-error: true
-              with:
-                  name: failures-artifacts
-                  # Retain the merged artifacts in case of a rerun.
-                  pattern: failures-artifacts*
-                  delete-merged: true
+        with:
+          name: failures-artifacts--${{ matrix.part }}
+          path: artifacts/test-results
+          if-no-files-found: ignore
 
-            - name: Merge flaky tests reports
-              id: merge-flaky-tests-reports
-              uses: actions/upload-artifact/merge@v4
-              continue-on-error: true
-              with:
-                  name: flaky-tests-report
-                  pattern: flaky-tests-report*
-                  delete-merged: true
+      - name: Archive flaky tests report
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        if: ${{ !cancelled() }}
+        with:
+          name: flaky-tests-report--${{ matrix.part }}
+          path: flaky-tests
+          if-no-files-found: ignore
 
-    report-to-issues:
-        name: Report to GitHub
-        needs: [merge-artifacts]
-        if: ${{ needs.merge-artifacts.outputs.has-flaky-test-report == 'true' }}
-        runs-on: tenki-standard-autoscale
-        permissions:
-            contents: read
-            issues: write
-            pull-requests: write
-        steps:
-            # Checkout defaults to using the branch which triggered the event, which
-            # isn't necessarily `trunk` (e.g. in the case of a merge).
-            - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-              with:
-                  ref: trunk
-                  show-progress: ${{ runner.debug == '1' && 'true' || 'false' }}
-                  persist-credentials: false
+  merge-artifacts:
+    name: Merge Artifacts
+    if: ${{ !cancelled() }}
+    needs: [e2e-playwright]
+    runs-on: ${{ inputs.runner || 'tenki-standard-autoscale' }}
+    permissions: {}
+    outputs:
+      has-flaky-test-report: ${{ !!steps.merge-flaky-tests-reports.outputs.artifact-id }}
+    steps:
+      - name: Merge failures artifacts
+        uses: actions/upload-artifact/merge@v4
+        # Don't fail the job if there aren't any artifacts to merge.
+        continue-on-error: true
+        with:
+          name: failures-artifacts
+          # Retain the merged artifacts in case of a rerun.
+          pattern: failures-artifacts*
+          delete-merged: true
 
-            - uses: actions/download-artifact@v5.0.0
-              # Don't fail the job if there isn't any flaky tests report.
-              continue-on-error: true
-              with:
-                  name: flaky-tests-report
-                  path: flaky-tests
+      - name: Merge flaky tests reports
+        id: merge-flaky-tests-reports
+        uses: actions/upload-artifact/merge@v4
+        continue-on-error: true
+        with:
+          name: flaky-tests-report
+          pattern: flaky-tests-report*
+          delete-merged: true
 
-            - name: Setup Node.js and install dependencies
-              uses: ./.github/setup-node
+  report-to-issues:
+    name: Report to GitHub
+    needs: [merge-artifacts]
+    if: ${{ needs.merge-artifacts.outputs.has-flaky-test-report == 'true' }}
+    runs-on: ${{ inputs.runner || 'tenki-standard-autoscale' }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # Checkout defaults to using the branch which triggered the event, which
+      # isn't necessarily `trunk` (e.g. in the case of a merge).
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: trunk
+          show-progress: ${{ runner.debug == '1' && 'true' || 'false' }}
+          persist-credentials: false
 
-            - name: Npm build
-              # TODO: We don't have to build the entire project, just the action itself.
-              run: npm run build:packages
+      - uses: actions/download-artifact@v5.0.0
+        # Don't fail the job if there isn't any flaky tests report.
+        continue-on-error: true
+        with:
+          name: flaky-tests-report
+          path: flaky-tests
 
-            - name: Report flaky tests
-              uses: ./packages/report-flaky-tests
-              with:
-                  repo-token: '${{ secrets.GITHUB_TOKEN }}'
-                  label: '[Type] Flaky Test'
-                  artifact-path: flaky-tests
+      - name: Setup Node.js and install dependencies
+        uses: ./.github/setup-node
+
+      - name: Npm build
+        # TODO: We don't have to build the entire project, just the action itself.
+        run: npm run build:packages
+
+      - name: Report flaky tests
+        uses: ./packages/report-flaky-tests
+        with:
+          repo-token: '${{ secrets.GITHUB_TOKEN }}'
+          label: '[Type] Flaky Test'
+          artifact-path: flaky-tests
